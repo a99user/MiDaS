@@ -13,6 +13,9 @@ from midas.midas_net import MidasNet
 from midas.midas_net_custom import MidasNet_small
 from midas.transforms import Resize, NormalizeImage, PrepareForNet
 
+import numpy as np
+from tqdm import tqdm
+
 
 def run(input_path, output_path, model_path, model_type="large", optimize=True):
     """Run MonoDepthNN to compute depth maps.
@@ -104,19 +107,19 @@ def run(input_path, output_path, model_path, model_type="large", optimize=True):
 
     print("start processing")
 
-    for ind, img_name in enumerate(img_names):
+    for ind, img_name in tqdm(enumerate(img_names), total=num_images):
 
-        print("  processing {} ({}/{})".format(img_name, ind + 1, num_images))
+        # print("  processing {} ({}/{})".format(img_name, ind + 1, num_images))
 
         # input
 
-        img = utils.read_image(img_name)
+        img, gt_mask = utils.read_image(img_name)
         img_input = transform({"image": img})["image"]
 
         # compute
         with torch.no_grad():
             sample = torch.from_numpy(img_input).to(device).unsqueeze(0)
-            if optimize==True and device == torch.device("cuda"):
+            if optimize == True and device == torch.device("cuda"):
                 sample = sample.to(memory_format=torch.channels_last)  
                 sample = sample.half()
             prediction = model.forward(sample)
@@ -136,7 +139,7 @@ def run(input_path, output_path, model_path, model_type="large", optimize=True):
         filename = os.path.join(
             output_path, os.path.splitext(os.path.basename(img_name))[0]
         )
-        utils.write_depth(filename, prediction, bits=2)
+        utils.write_depth(filename, prediction, gt_mask, cv2.cvtColor((img * 255).astype(np.uint8), cv2.COLOR_RGB2BGR), bits=1)
 
     print("finished")
 

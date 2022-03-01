@@ -5,6 +5,7 @@ import re
 import numpy as np
 import cv2
 import torch
+from sklearn.cluster import KMeans
 
 
 def read_pfm(path):
@@ -104,14 +105,22 @@ def read_image(path):
     Returns:
         array: RGB image (0-1)
     """
-    img = cv2.imread(path)
+    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    img = img[:720, :, :]
 
     if img.ndim == 2:
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        mask = np.zeros(img.shape[:2])
+    elif img.shape[2] == 4:
+        mask = img[:, :, 3]
+        mask = np.where(mask == 255, np.ones_like(mask), np.zeros_like(mask))
+        img = img[:, :, :3]
+    else:
+        mask = np.zeros(img.shape[:2])
 
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) / 255.0
 
-    return img
+    return img, mask
 
 
 def resize_image(img):
@@ -163,14 +172,15 @@ def resize_depth(depth, width, height):
 
     return depth_resized
 
-def write_depth(path, depth, bits=1):
+
+def write_depth(path, depth, gt_mask, original_image, bits=1):
     """Write depth map to pfm and png file.
 
     Args:
         path (str): filepath without extension
         depth (array): depth
     """
-    write_pfm(path + ".pfm", depth.astype(np.float32))
+    # write_pfm(path + ".pfm", depth.astype(np.float32))
 
     depth_min = depth.min()
     depth_max = depth.max()
@@ -183,8 +193,40 @@ def write_depth(path, depth, bits=1):
         out = np.zeros(depth.shape, dtype=depth.type)
 
     if bits == 1:
-        cv2.imwrite(path + ".png", out.astype("uint8"))
+        out = out.astype("uint8")
     elif bits == 2:
-        cv2.imwrite(path + ".png", out.astype("uint16"))
+        out = out.astype("uint16")
+
+    # out = (out > 150) * out
+    # print(out.shape)
+    out = out * gt_mask
+    out_depth = out.copy()
+
+    out_filtered = out[out > 0]
+    out_flatten = out_filtered.reshape(-1, 1)
+    # print(out_flatten.shape)
+
+    # kmeans = KMeans(n_clusters=2, random_state=0).fit(out_flatten)
+    # pic2show = kmeans.cluster_centers_[kmeans.labels_]
+    # out = pic2show.reshape(out.shape[0], out.shape[1]).astype(np.uint8)
+    kmeans = KMeans(n_clusters=2, random_state=0).fit(out_flatten)
+    if kmeans.cluster_centers_[0, 0] - kmeans.cluster_centers_[1, 0] > 50:
+        # mean_clusters_value = np.mean(kmeans.cluster_centers_)
+        # out = np.where(out >= mean_clusters_value, out, np.zeros_like(out))
+        bg_labels = out_flatten[kmeans.labels_ == 1]
+        max_bg_value = np.max(bg_labels)
+        out = np.where(out >= max_bg_value, out, np.zeros_like(out))
+
+    new_gt_mask = np.where(out > 0, np.ones_like(out), out)
+
+    first_row = np.concatenate((original_image, cv2.cvtColor(out_depth, cv2.COLOR_GRAY2BGR)), axis=1)
+    second_row = np.concatenate(
+        (original_image * new_gt_mask[..., None], cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)), axis=1)
+
+    result = np.concatenate(
+        (first_row, second_row), axis=0)
+
+    # cv2.imwrite(path + ".png", out)
+    cv2.imwrite(path + ".jpeg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
 
     return
